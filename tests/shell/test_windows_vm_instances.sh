@@ -284,7 +284,7 @@ stat() {
     case "$*" in *%u*) printf '0\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
     return 0
     ;;
-  /usr/bin/false)
+  /usr/bin/env)
     case "$*" in *%u*) printf '1000\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
     return 0
     ;;
@@ -307,7 +307,7 @@ priv_target "$user_target" >/dev/null 2>&1 &&
 # A non-root owner in an otherwise trusted chain must still stop the walk.
 priv_target /etc/hostname >/dev/null 2>&1 &&
   fail "priv_target accepted a file owned by another user"
-priv_target /usr/bin/false >/dev/null 2>&1 &&
+priv_target /usr/bin/env >/dev/null 2>&1 &&
   fail "priv_target accepted an executable owned by another user"
 unset -f stat
 pass "priv_target accepts only a canonical, root-owned, executable file"
