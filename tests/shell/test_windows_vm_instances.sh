@@ -291,8 +291,10 @@ stat() {
   esac
   command stat "$@"
 }
-[[ $(priv_target /usr/bin/true) == /usr/bin/true ]] ||
-  fail "priv_target rejected a canonical root-owned executable"
+target_out=$(priv_target /usr/bin/true 2>&1) || true
+[[ $target_out == /usr/bin/true ]] ||
+  fail "priv_target rejected a canonical root-owned executable" \
+    "got [$target_out] f=$([[ -f /usr/bin/true ]] && echo y) L=$([[ -L /usr/bin/true ]] && echo y) x=$([[ -x /usr/bin/true ]] && echo y) realpath=$(realpath -e -- /usr/bin/true 2>&1) stat=$(stat -Lc '%u %a' /usr/bin/true 2>&1)"
 priv_target /etc/passwd >/dev/null 2>&1 &&
   fail "priv_target accepted a non-executable file"
 priv_target /bin/true >/dev/null 2>&1 &&
