@@ -18,14 +18,15 @@
       "lang": "shell",
       "tests": [
         "bash",
-        "tests/shell/test_windows_vm_instances.sh"
+        "-c",
+        "for f in tests/shell/test_windows_vm_instances.sh tests/shell/test_windows_vm_compose.sh tests/shell/test_windows_vm_launch.sh tests/shell/test_windows_vm_readiness.sh tests/shell/test_windows_vm_rdp_probe.sh tests/shell/test_install.sh; do bash \"$f\" >/dev/null || exit 1; done"
       ]
     }
   ],
   "exempt": [
     {
       "path": "tools/mutator.py",
-      "reason": "vendored engine tooling, not plugin source; mutating it makes its own run non-terminating"
+      "reason": "vendored engine tooling, not plugin source; it is exercised end-to-end by the mutation pass on every run. This copy carries one local patch: number mutants inside shell redirections (>&2, 2>&1) and exit codes are skipped, because they are structural idioms whose mutation no test can observe and they used to score as permanent survivors."
     },
     {
       "path": "tools/policy_check.py",

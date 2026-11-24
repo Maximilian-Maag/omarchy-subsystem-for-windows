@@ -154,6 +154,15 @@ def mutants_for(text, lang, per_operator=2):
                                                      start - (text.rfind("\n", 0, start) + 1)):
                 continue                                  # inside a regex literal
             if label == "number±1":
+                # A file-descriptor number (`>&2`) and an exit status (`exit 1`)
+                # are structural, not data: changing them cannot be observed by
+                # any test, so counting them as survivors punishes a repository
+                # for writing correct shell. Skip them like a comment.
+                before = text[max(0, start - 6):start]
+                after = text[end:end + 2]
+                if (before.endswith(">") or before.endswith(">&")
+                        or re.search(r"\bexit\s+$", before) or after.startswith(">&")):
+                    continue
                 digits = m.group(0)
                 value = str(int(digits) + 1 if digits.strip("0") else 1)
                 if value == digits:

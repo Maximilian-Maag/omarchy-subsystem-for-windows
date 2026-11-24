@@ -92,10 +92,14 @@ docker_needs_sudo() { omarchy-sudo-docker; }
 # prompt the user grants for the trusted helper could run an attacker's binary
 # as root. Fails closed (empty output) when no trustworthy target is found.
 priv_target() {
+  # Production calls this with no arguments and gets the installed candidates.
+  # The argument seam exists so tests can prove each rejection (non-executable,
+  # symlink, user-owned) without installing anything as root.
+  local candidates=("$@")
+  (( ${#candidates[@]} )) ||
+    candidates=(/usr/local/bin/omarchy-subsystem-for-windows /usr/bin/omarchy-subsystem-for-windows)
   local candidate canonical probe owner mode
-  for candidate in \
-    /usr/local/bin/omarchy-subsystem-for-windows \
-    /usr/bin/omarchy-subsystem-for-windows; do
+  for candidate in "${candidates[@]}"; do
     [[ -f $candidate && ! -L $candidate && -x $candidate ]] || continue
     canonical=$(realpath -e -- "$candidate" 2>/dev/null) || continue
     [[ $canonical == "$candidate" ]] || continue

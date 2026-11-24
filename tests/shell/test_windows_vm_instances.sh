@@ -34,6 +34,13 @@ PATH="$STUB_BIN:$PATH"
 set -- help
 source "$ROOT/bin/omarchy-subsystem-for-windows" >/dev/null 2>&1
 
+# The default instance's historical port pair is a constant, not metadata: assert
+# it before any instance.conf exists, so a changed default cannot hide behind a
+# stored value.
+select_instance default
+[[ $WEB_PORT == 8006 && $RDP_PORT == 3389 ]] ||
+  fail "default instance port pair changed: $WEB_PORT / $RDP_PORT"
+
 unmount_all() {
   local path
   # Every instance's anchors live below the runtime base, so unmount whatever is
@@ -179,6 +186,8 @@ resolve_caller >/dev/null || fail "named instance could not resolve the caller"
 [[ $INSTANCE_STORAGE == "$HOME/.windows-work" ]] || fail "named storage source not derived"
 select_instance default
 [[ $RUNTIME_DIR == "$OMARCHY_WINDOWS_DIR" ]] || fail "default runtime dir not restored"
+[[ $WEB_PORT == 8006 && $RDP_PORT == 3389 ]] ||
+  fail "default instance ports changed: $WEB_PORT / $RDP_PORT"
 [[ $COMPOSE_FILE == "$OMARCHY_WINDOWS_DIR/docker-compose.yml" ]] || fail "default compose path not restored"
 pass "selecting an instance derives every path from its name"
 
@@ -244,3 +253,69 @@ grep -q '^      - isolated$' "$OMARCHY_WINDOWS_DIR/instances/lab/docker-compose.
 [[ -f $HOME/.local/share/applications/windows-vm-lab.desktop ]] ||
   fail "create wrote no desktop entry"
 pass "create allocates a free port pair and records the settings"
+
+# --- privileged target selection -------------------------------------------
+
+# Production calls priv_target with no arguments and gets the installed copies;
+# the argument seam lets this suite prove each rejection without a root install.
+# Inside the user namespace host root is unmapped, so stat is stubbed to report
+# the ownership/mode the production layout would have; the file tests (-f, -L,
+# -x) stay real.
+stat() {
+  local path=${!#}
+  case $path in
+  /usr/bin/true | /usr/bin | /usr | /)
+    case "$*" in *%u*) printf '0\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  /etc/passwd)
+    case "$*" in *%u*) printf '0\n' ;; *%a*) printf '644\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  /etc/hostname)
+    case "$*" in *%u*) printf '1000\n' ;; *%a*) printf '644\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  /etc)
+    case "$*" in *%u*) printf '0\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  /usr/bin/false)
+    case "$*" in *%u*) printf '1000\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  esac
+  command stat "$@"
+}
+[[ $(priv_target /usr/bin/true) == /usr/bin/true ]] ||
+  fail "priv_target rejected a canonical root-owned executable"
+priv_target /etc/passwd >/dev/null 2>&1 &&
+  fail "priv_target accepted a non-executable file"
+priv_target /bin/true >/dev/null 2>&1 &&
+  fail "priv_target accepted a path whose canonical form differs"
+user_target="$TMPDIR/user-owned"
+printf '#!/bin/bash\nexit 0\n' >"$user_target"
+chmod +x "$user_target"
+priv_target "$user_target" >/dev/null 2>&1 &&
+  fail "priv_target accepted a user-owned file"
+# A non-root owner in an otherwise trusted chain must still stop the walk.
+priv_target /etc/hostname >/dev/null 2>&1 &&
+  fail "priv_target accepted a file owned by another user"
+priv_target /usr/bin/false >/dev/null 2>&1 &&
+  fail "priv_target accepted an executable owned by another user"
+unset -f stat
+pass "priv_target accepts only a canonical, root-owned, executable file"
+
+# --- metadata keeps its creation stamp -------------------------------------
+
+conf="$OMARCHY_WINDOWS_DIR/instances/lab/instance.conf"
+grep -q '^CREATED=[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T' "$conf" ||
+  fail "create wrote no creation timestamp"
+sed -i 's/^CREATED=.*/CREATED=2001-02-03T04:05:06Z/' "$conf"
+W_VERSION=10 W_RAM=4G W_CORES=2 W_DISK=64G W_INTERNET=off
+W_WEB_PORT=$lab_web W_RDP_PORT=$lab_rdp W_USB=""
+write_instance_conf || fail "rewriting the metadata failed"
+grep -q '^CREATED=2001-02-03T04:05:06Z$' "$conf" ||
+  fail "rewriting the metadata lost the creation stamp"
+grep -q '^INSTANCE=lab$' "$conf" || fail "rewriting the metadata lost the instance"
+pass "metadata keeps its creation stamp when rewritten"
