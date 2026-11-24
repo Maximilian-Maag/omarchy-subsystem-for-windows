@@ -7,6 +7,14 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT
 
+# The engine refuses to run on a non-x86_64 host. CI has no omarchy-hw-x86, so
+# stub the probe rather than depending on the host's install.
+stub_bin="$test_dir/bin"
+mkdir -p "$stub_bin"
+printf '#!/bin/bash\nexit 0\n' >"$stub_bin/omarchy-hw-x86"
+chmod +x "$stub_bin/omarchy-hw-x86"
+PATH="$stub_bin:$PATH"
+
 source "$ROOT/bin/omarchy-subsystem-for-windows" help >/dev/null 2>&1
 
 assert_mounts_safe() { return 0; }

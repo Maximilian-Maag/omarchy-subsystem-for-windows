@@ -14,6 +14,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The engine refuses to run on a non-x86_64 host. CI has no omarchy-hw-x86, so
+# stub the probe rather than depending on the host's install.
+stub_bin="$test_dir/bin"
+mkdir -p "$stub_bin"
+printf '#!/bin/bash\nexit 0\n' >"$stub_bin/omarchy-hw-x86"
+chmod +x "$stub_bin/omarchy-hw-x86"
+PATH="$stub_bin:$PATH"
+
 source "$ROOT/bin/omarchy-subsystem-for-windows" help >/dev/null 2>&1
 
 # Answers the probe the way each real counterparty does. docker-proxy accepts

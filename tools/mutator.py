@@ -227,10 +227,11 @@ def run_target(repo, target, cfg, tmp_root, dry_run=False, log=print):
             return {"name": target["path"], "lang": lang, "mutants": [],
                     "error": "baseline test run timed out"}
         if base.returncode != 0:
+            lines = (base.stdout + base.stderr).strip().splitlines()
+            last = lines[-1][:160] if lines else "no output"
             return {"name": target["path"], "lang": lang, "mutants": [],
                     "error": "baseline tests fail on unmutated code (a mutation score "
-                             "would be meaningless): " +
-                             (base.stdout + base.stderr).strip().splitlines()[-1][:160]}
+                             "would be meaningless): " + last}
 
     results = []
     for offset, end, replacement, label, line_no in mutants:
