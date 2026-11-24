@@ -14,6 +14,12 @@ fi
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 export ROOT
 
+require_command() {
+  local command="$1"
+
+  command -v "$command" >/dev/null || fail "required command is available: $command"
+}
+
 pass() {
   printf 'ok - %s\n' "$1"
 }

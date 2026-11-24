@@ -8,7 +8,9 @@
     "symlinks": {},
     "artifacts": {},
     "secrets": {},
-    "abs_path": {}
+    "abs_path": {
+      "tests/shell/test_windows_vm_mount_boundary.sh": "the test mounts isolated tmpfs filesystems at /run, /var and /home and uses /home/alice as the caller's home; the literal path is part of the fixture, not a leaked local path"
+    }
   },
   "tests": {
     "kinds": [
