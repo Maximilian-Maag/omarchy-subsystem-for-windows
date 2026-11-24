@@ -264,8 +264,12 @@ pass "create allocates a free port pair and records the settings"
 stat() {
   local path=${!#}
   case $path in
-  /usr/bin/true | /usr/bin | /usr | /)
+  /usr/bin/true | /usr/bin | /usr)
     case "$*" in *%u*) printf '0\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
+    return 0
+    ;;
+  /)
+    case "$*" in *%u*) printf '0\n' ;; *%a*) printf '555\n' ;; *) command stat "$@" ;; esac
     return 0
     ;;
   /etc/passwd)
