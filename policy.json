@@ -1,0 +1,31 @@
+{
+  "checker": 3,
+  "plugin": true,
+  "shell_style": true,
+  "shebang": "bash",
+  "ignore": [],
+  "allow": {
+    "symlinks": {},
+    "artifacts": {},
+    "secrets": {},
+    "abs_path": {}
+  },
+  "tests": {
+    "kinds": [
+      "shell"
+    ],
+    "integration_applicable": false,
+    "files": {
+      "shell": "tests/shell/test_*.sh"
+    },
+    "runner": "tools/run_tests.sh",
+    "mutator": "tools/mutator.py",
+    "mutation_config": "tests/mutation.json",
+    "ci": ".github/workflows/test.yml",
+    "note": "shell suites drive the real engine through its internal functions and its command line with stubbed docker/pkexec; mutation testing covers the engine",
+    "min_kill_rate": 0.8,
+    "source_globs": [
+      "bin/*"
+    ]
+  }
+}

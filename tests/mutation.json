@@ -1,0 +1,35 @@
+{
+  "_about": [
+    "Mutation-test targets for this plugin. Each target names the file to mutate and",
+    "the test command that must notice a change (the modules that cover it).",
+    "Run with tools/mutator.py, or as part of tools/run_tests.sh.",
+    "min_kill_rate is the floor: below it the run fails, and a target that yields no",
+    "mutants at all fails too, so a mutation pass can never be green over nothing.",
+    "Files this repository ships but cannot meaningfully mutate here are listed under",
+    "'exempt' with a reason, which the policy check enforces."
+  ],
+  "min_kill_rate": 0.8,
+  "timeout": 120,
+  "per_operator": 3,
+  "max_mutants": 80,
+  "targets": [
+    {
+      "path": "bin/omarchy-subsystem-for-windows",
+      "lang": "shell",
+      "tests": [
+        "bash",
+        "tests/shell/test_windows_vm_instances.sh"
+      ]
+    }
+  ],
+  "exempt": [
+    {
+      "path": "tools/mutator.py",
+      "reason": "vendored engine tooling, not plugin source; mutating it makes its own run non-terminating"
+    },
+    {
+      "path": "tools/policy_check.py",
+      "reason": "vendored engine tooling, not plugin source; it is exercised end-to-end by 'policy as code' on every run"
+    }
+  ]
+}

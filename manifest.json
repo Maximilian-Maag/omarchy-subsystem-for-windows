@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "Maximilian-Maag.subsystem-for-windows",
+  "name": "Subsystem for Windows",
+  "version": "0.1.0",
+  "author": "Maximilian-Maag",
+  "license": "MIT",
+  "description": "Runs Windows as a KVM guest inside a privileged Docker container on the Omarchy desktop: one VM per named instance, each with its own disk, ports, network and settings. Creates and configures instances, launches them over RDP, stops and removes them, and keeps the compose file root-owned so a privileged bring-up never consumes a file a user process could rewrite.",
+  "kinds": [
+    "cli"
+  ],
+  "activation": "auto",
+  "entryPoints": {},
+  "omarchy_meta": {
+    "installScript": "install.sh",
+    "features": [
+      "One VM per named instance; the default instance keeps the historical ~/.windows and ~/Windows layout so existing installs keep working",
+      "create validates version, RAM, cores, disk, ports and instance name before anything privileged runs; a URL is refused as a Windows version",
+      "The compose file lives in a root-owned directory and is written only by the elevated, input-validated write_compose action",
+      "launch starts the VM if needed and connects over RDP; a session that connected but ended stops the VM, a failed connection leaves it running and says so",
+      "The internet toggle recreates the container's network attachment with masquerading disabled, so an offline instance cannot reach the network",
+      "instances --json reports each VM's name, state, ports and storage for scripts and panels"
+    ]
+  }
+}
