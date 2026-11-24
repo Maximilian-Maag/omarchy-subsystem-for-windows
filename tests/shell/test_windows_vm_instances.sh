@@ -264,7 +264,7 @@ pass "create allocates a free port pair and records the settings"
 stat() {
   local path=${!#}
   case $path in
-  /usr/bin/true | /usr/bin | /usr)
+  /usr/bin/bash | /usr/bin | /usr)
     case "$*" in *%u*) printf '0\n' ;; *%a*) printf '755\n' ;; *) command stat "$@" ;; esac
     return 0
     ;;
@@ -291,10 +291,10 @@ stat() {
   esac
   command stat "$@"
 }
-target_out=$(priv_target /usr/bin/true 2>&1) || true
-[[ $target_out == /usr/bin/true ]] ||
+target_out=$(priv_target /usr/bin/bash 2>&1) || true
+[[ $target_out == /usr/bin/bash ]] ||
   fail "priv_target rejected a canonical root-owned executable" \
-    "got [$target_out] f=$([[ -f /usr/bin/true ]] && echo y) L=$([[ -L /usr/bin/true ]] && echo y) x=$([[ -x /usr/bin/true ]] && echo y) realpath=$(realpath -e -- /usr/bin/true 2>&1) stat=$(stat -Lc '%u %a' /usr/bin/true 2>&1)"
+    "got [$target_out] f=$([[ -f /usr/bin/bash ]] && echo y) L=$([[ -L /usr/bin/bash ]] && echo y) x=$([[ -x /usr/bin/bash ]] && echo y) realpath=$(realpath -e -- /usr/bin/bash 2>&1) stat=$(stat -Lc '%u %a' /usr/bin/bash 2>&1)"
 priv_target /etc/passwd >/dev/null 2>&1 &&
   fail "priv_target accepted a non-executable file"
 priv_target /bin/true >/dev/null 2>&1 &&
