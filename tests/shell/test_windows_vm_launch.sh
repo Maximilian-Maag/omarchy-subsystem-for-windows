@@ -19,14 +19,20 @@ cat >"$fake_bin/omarchy-notification-send" <<'STUB'
 #!/bin/bash
 printf 'notify %s\n' "$*" >>"$TEST_LOG"
 STUB
-printf '#!/bin/bash\nexit "$RDP_STATUS"\n' >"$fake_bin/xfreerdp3"
+# The client takes its arguments on stdin; record them so the audio flags can be
+# asserted against what the guest actually receives.
+cat >"$fake_bin/xfreerdp3" <<'STUB'
+#!/bin/bash
+cat >"$TEST_LOG.rdp-args"
+exit "$RDP_STATUS"
+STUB
 chmod +x "$fake_bin"/*
 
 # Launch with FreeRDP exiting $1, recording every privileged action and notification.
 run_launch() (
   export HOME="$test_tmp/home" OMARCHY_WINDOWS_DIR="$test_tmp/win" TEST_LOG="$test_tmp/calls.log"
   export PATH="$fake_bin:$PATH" RDP_STATUS="$1"
-  : >"$TEST_LOG"
+  : >"$TEST_LOG" >"$TEST_LOG.rdp-args"
   set -- help
   source "$ROOT/bin/omarchy-subsystem-for-windows" >/dev/null
   migrate_legacy_compose() { return 0; }
@@ -43,6 +49,16 @@ for code in 0 2 4 12; do
     fail "Windows VM stops after a session that ended with $code" "$(cat "$test_tmp/calls.log")"
 done
 pass "Windows VM stops after an RDP session that connected"
+
+# A bare /sound leaves the backend to FreeRDP's default, which resolves to the
+# fake backend on this build: the guest plays audio and nothing is heard. The
+# client must be told to use ALSA, which reaches the host through PipeWire.
+run_launch 0 || fail "launch with audio flags succeeds"
+grep -qxF '/sound:sys:alsa' "$test_tmp/calls.log.rdp-args" ||
+  fail "the RDP session carries guest audio to the host" "$(cat "$test_tmp/calls.log.rdp-args")"
+grep -qxF '/microphone:sys:alsa' "$test_tmp/calls.log.rdp-args" ||
+  fail "the RDP session carries host microphone audio into the guest" "$(cat "$test_tmp/calls.log.rdp-args")"
+pass "the RDP session names the ALSA backend instead of the fake one"
 
 # Denied connections, credential failures and transport errors never connected.
 for code in 7 9 10 131; do
