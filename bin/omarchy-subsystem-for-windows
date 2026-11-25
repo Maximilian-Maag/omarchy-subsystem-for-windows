@@ -56,6 +56,10 @@ INTERNET=on
 WEB_PORT=8006
 RDP_PORT=3389
 USB_DEVICES=""
+# Hardware acceleration. CPU acceleration is KVM host passthrough and is always
+# on; these two are opt-in because both need host hardware that may be absent.
+GPU=off
+AUDIO=off
 PROJECT=windows
 INSTANCE_STORAGE=""
 INSTANCE_SHARED=""
@@ -201,6 +205,9 @@ valid_version() {
 # USB passthrough as vendor:product pairs, comma separated. Validated here and
 # again in the privileged writer, because it lands in the QEMU argument string.
 valid_usb() { [[ -z $1 ]] || [[ $1 =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}(,[0-9a-fA-F]{4}:[0-9a-fA-F]{4})*$ ]]; }
+# Hardware acceleration toggles are on/off. Anything else is refused rather than
+# coerced, so a typo cannot silently disable a device the user asked for.
+valid_toggle() { [[ $1 == on || $1 == off ]]; }
 
 # True when the runtime path is the production one (root-owned, no symlinks).
 # Tests and development pass OMARCHY_WINDOWS_DIR and stay on the unprivileged
@@ -233,6 +240,12 @@ select_instance() {
     return 2
   }
   INSTANCE=$name
+  # Every instance starts from the same defaults, whatever the shell last held:
+  # select_instance may be called more than once in one process (create, then
+  # config), and a leftover toggle from the previous instance would silently
+  # accelerate the next one. load_instance_conf overrides these from disk.
+  GPU=off
+  AUDIO=off
   if [[ $name == default ]]; then
     RUNTIME_DIR=$RUNTIME_BASE
     PROJECT=windows
@@ -244,6 +257,8 @@ select_instance() {
     WEB_PORT=8006
     RDP_PORT=3389
     USB_DEVICES=""
+    GPU=off
+    AUDIO=off
   else
     RUNTIME_DIR="$RUNTIME_BASE/instances/$name"
     PROJECT="omarchy-windows-$name"
@@ -275,6 +290,8 @@ load_instance_conf() {
     WEB_PORT) valid_port "$value" && WEB_PORT=$value ;;
     RDP_PORT) valid_port "$value" && RDP_PORT=$value ;;
     USB) valid_usb "$value" && USB_DEVICES=$value ;;
+    GPU) valid_toggle "$value" && GPU=$value ;;
+    AUDIO) valid_toggle "$value" && AUDIO=$value ;;
     esac
   done <"$INSTANCE_CONF"
 }
@@ -878,6 +895,8 @@ write_instance_conf() {
     printf 'WEB_PORT=%s\n' "$W_WEB_PORT"
     printf 'RDP_PORT=%s\n' "$W_RDP_PORT"
     printf 'USB=%s\n' "$W_USB"
+    printf 'GPU=%s\n' "$W_GPU"
+    printf 'AUDIO=%s\n' "$W_AUDIO"
     printf 'CREATED=%s\n' "$created"
   } >"$tmp" || {
     rm -f -- "$tmp"
@@ -901,7 +920,8 @@ write_compose_atomically() (
   local ram=$W_RAM cores=$W_CORES disk=$W_DISK username=$W_USERNAME
   local password=$W_PASSWORD tz=$W_TZ version=$W_VERSION internet=$W_INTERNET
   local web_port=$W_WEB_PORT rdp_port=$W_RDP_PORT usb=$W_USB
-  local tmp="" rc esc_password arguments usb_devices service_networks networks_tail pair
+  local gpu=$W_GPU audio=$W_AUDIO
+  local tmp="" rc esc_password arguments usb_devices gpu_devices accel_env service_networks networks_tail pair
   cleanup_writer() {
     rc=$?
     trap - EXIT
@@ -935,6 +955,18 @@ write_compose_atomically() (
     done
   fi
   usb_devices=""
+  # GPU acceleration hands the host's render node to the guest: QEMU needs the
+  # DRM device to build a virgl/Venus context. The group id is inherited from
+  # the host's render node, so the container user can open it.
+  gpu_devices=""
+  if [[ $gpu == on ]]; then gpu_devices=$'      - /dev/dri\n'; fi
+  # The image turns acceleration on from these two variables. GPU=Y makes QEMU
+  # build a virgl/Venus context from the render node; AUDIO=Y attaches the
+  # HDA device and streams it to the web console. Neither is written when off,
+  # so an older compose keeps its previous behaviour.
+  accel_env=""
+  if [[ $gpu == on ]]; then accel_env+=$'      GPU: "Y"\n'; fi
+  if [[ $audio == on ]]; then accel_env+=$'      AUDIO: "Y"\n'; fi
   service_networks=""
   networks_tail=""
   if [[ -n $usb ]]; then usb_devices=$'      - /dev/bus/usb\n'; fi
@@ -967,10 +999,10 @@ services:
       PROTECT: "Y"
       TZ: "$tz"
       ARGUMENTS: "$arguments"
-    devices:
+${accel_env}    devices:
       - /dev/kvm
       - /dev/net/tun
-${usb_devices}    cap_add:
+${usb_devices}${gpu_devices}    cap_add:
       - NET_ADMIN
     volumes:
       - $EXPECTED_STORAGE:/storage
@@ -1003,6 +1035,7 @@ __priv_write_compose() {
   local ram cores disk username password tz key value
   local version="$VERSION" internet="$INTERNET" web_port="$WEB_PORT"
   local rdp_port="$RDP_PORT" usb="$USB_DEVICES"
+  local gpu="$GPU" audio="$AUDIO"
 
   while IFS='=' read -r key value; do
     case "$key" in
@@ -1017,6 +1050,8 @@ __priv_write_compose() {
     WEB_PORT) web_port="$value" ;;
     RDP_PORT) rdp_port="$value" ;;
     USB) usb="$value" ;;
+    GPU) gpu="$value" ;;
+    AUDIO) audio="$value" ;;
     esac
   done
 
@@ -1032,11 +1067,21 @@ __priv_write_compose() {
   valid_port "$rdp_port" || { echo "invalid RDP port: $rdp_port" >&2; exit 2; }
   [[ $web_port != "$rdp_port" ]] || { echo "web and RDP ports must differ" >&2; exit 2; }
   valid_usb "$usb" || { echo "invalid USB passthrough list: $usb" >&2; exit 2; }
+  valid_toggle "$gpu" || { echo "invalid GPU setting: $gpu" >&2; exit 2; }
+  valid_toggle "$audio" || { echo "invalid audio setting: $audio" >&2; exit 2; }
+  # Refuse the request rather than write a compose that asks for a device the
+  # host does not have: Docker would start the container and QEMU would fail
+  # later with a message that never mentions the missing device.
+  if [[ $gpu == on && ! -d /dev/dri ]]; then
+    echo "GPU acceleration requested but /dev/dri is missing" >&2
+    exit 2
+  fi
   # Hand the validated settings to the compose writer as globals; it derives
   # every path and name from the selected instance, never from input.
   W_RAM=$ram W_CORES=$cores W_DISK=$disk W_USERNAME=$username
   W_PASSWORD=$password W_TZ=$tz W_VERSION=$version W_INTERNET=$internet
   W_WEB_PORT=$web_port W_RDP_PORT=$rdp_port W_USB=$usb
+  W_GPU=$gpu W_AUDIO=$audio
   prepare_caller_mounts || exit 2
   # Readable by root and the docker group only. Any failure after mounting rolls
   # back just the binds this writer created and leaves an old compose untouched.
@@ -1418,9 +1463,10 @@ allocate_port_pair() {
 # read them from a file the caller could have written.
 write_compose() {
   local ram="$1" cores="$2" disk="$3" username="$4" password="$5" tz="$6"
-  printf 'RAM=%s\nCORES=%s\nDISK=%s\nUSERNAME=%s\nPASSWORD=%s\nTZ=%s\nVERSION=%s\nINTERNET=%s\nWEB_PORT=%s\nRDP_PORT=%s\nUSB=%s\n' \
+  printf 'RAM=%s\nCORES=%s\nDISK=%s\nUSERNAME=%s\nPASSWORD=%s\nTZ=%s\nVERSION=%s\nINTERNET=%s\nWEB_PORT=%s\nRDP_PORT=%s\nUSB=%s\nGPU=%s\nAUDIO=%s\n' \
     "$ram" "$cores" "$disk" "$username" "$password" "$tz" \
-    "$VERSION" "$INTERNET" "$WEB_PORT" "$RDP_PORT" "$USB_DEVICES" |
+    "$VERSION" "$INTERNET" "$WEB_PORT" "$RDP_PORT" "$USB_DEVICES" \
+    "$GPU" "$AUDIO" |
     priv write_compose
 }
 
@@ -1858,13 +1904,18 @@ To stop: omarchy-subsystem-for-windows stop"
   fi
   # If scale is less than 130%, don't set any scale (use default 100)
 
+  # The bare /sound and /microphone options leave the backend to FreeRDP's
+  # default, which on this build resolves to its fake backend: the guest plays
+  # audio and nothing is heard. Naming ALSA makes the client open a real sink
+  # through PipeWire's ALSA bridge. The guest needs a sound device for any of
+  # this to carry audio, so AUDIO must be on for the instance (config audio=on).
   RDP_ARGS=(
     "/u:$WIN_USER"
     "/p:$WIN_PASS"
     "/v:127.0.0.1:$RDP_PORT"
     -grab-keyboard
-    /sound
-    /microphone
+    "/sound:sys:alsa"
+    "/microphone:sys:alsa"
     /clipboard
     /cert:ignore
     "/title:Windows VM - Omarchy${INSTANCE:+ ($INSTANCE)}"
@@ -1914,6 +1965,158 @@ To stop: omarchy-subsystem-for-windows stop"
     echo "RDP session closed. Windows VM is still running."
     echo "To stop it: omarchy-subsystem-for-windows stop"
   fi
+}
+
+# --- installing a Windows program into a guest -------------------------------
+
+# The host directory the guest sees as \\host.lan\Data. Derived from the same
+# anchors the mount layer uses, so a plugin install and a core install agree on
+# the location without the caller having to know it.
+instance_shared_dir() {
+  resolve_caller >/dev/null 2>&1 || return 1
+  if [[ $INSTANCE == default ]]; then
+    printf '%s\n' "$CALLER_HOME/Windows"
+  else
+    printf '%s\n' "$CALLER_HOME/Windows-$INSTANCE"
+  fi
+}
+
+# A Windows installer is a PE executable or an MSI database. The magic number is
+# checked rather than the extension: an .exe that is really a script would
+# otherwise be copied into the guest and fail there with a Windows error instead
+# of a clear one here.
+valid_installer() {
+  local file=$1 magic
+  [[ -f $file && ! -L $file && -r $file ]] || return 1
+  magic=$(head -c 2 -- "$file" 2>/dev/null) || return 1
+  [[ $magic == MZ ]] && return 0
+  magic=$(head -c 4 -- "$file" 2>/dev/null | od -An -tx1 | tr -d ' \n') || return 1
+  [[ $magic == d0cf11e0 ]]
+}
+
+# Run an installer inside the guest. The guest's only remote channel is RDP, so
+# the installer is started as the session's alternate shell: FreeRDP asks the
+# server to launch that command instead of the desktop shell. The file is first
+# copied into the shared folder, which the guest already has mapped as
+# \\host.lan\Data by the image's Samba service.
+install_exe() {
+  local file=$1 args=$2 keep_alive=$3 silent=$4
+  if [[ -z $file ]]; then
+    echo "usage: osw --install <installer.exe> [--instance <name>] [--args <args>]" >&2
+    return 2
+  fi
+  file=$(realpath -e -- "$file" 2>/dev/null) || {
+    echo "omarchy-subsystem-for-windows: no such file: $1" >&2
+    return 2
+  }
+  valid_installer "$file" || {
+    echo "omarchy-subsystem-for-windows: not a Windows installer (expected a PE .exe or an .msi): $file" >&2
+    return 2
+  }
+
+  migrate_legacy_compose 2>/dev/null || true
+  if ! instance_exists; then
+    if [[ $INSTANCE == default ]]; then
+      echo "The default Windows VM is not configured. Run: omarchy-subsystem-for-windows install" >&2
+    else
+      echo "Windows VM '$INSTANCE' is not configured. Run: omarchy-subsystem-for-windows create $INSTANCE" >&2
+    fi
+    return 2
+  fi
+
+  local shared base guest_path
+  shared=$(instance_shared_dir) || {
+    echo "omarchy-subsystem-for-windows: could not resolve the shared folder" >&2
+    return 2
+  }
+  mkdir -p -- "$shared" || return 2
+  # The guest sees the file under this name. Keep it to a safe alphabet so the
+  # path can be handed to the guest without quoting games; the copy keeps the
+  # original name's extension so Windows picks the right handler.
+  base=$(basename -- "$file")
+  base=${base//[^A-Za-z0-9._-]/_}
+  cp -- "$file" "$shared/$base" || {
+    echo "omarchy-subsystem-for-windows: could not copy the installer into $shared" >&2
+    return 2
+  }
+  chmod 0644 -- "$shared/$base" 2>/dev/null || true
+  guest_path="\\\\host.lan\\Data\\$base"
+
+  # The command the guest runs as its alternate shell. MSI files go through
+  # msiexec; anything else is launched directly. --args is appended verbatim so
+  # vendor-specific switches (/S, /quiet, /norestart) reach the installer.
+  local cmd
+  case ${base,,} in
+  *.msi)
+    cmd="msiexec /i \"$guest_path\""
+    [[ $silent == true ]] && cmd+=" /qn"
+    ;;
+  *) cmd="\"$guest_path\"" ;;
+  esac
+  [[ -n $args ]] && cmd+=" $args"
+
+  # Same credential lookup as launch: the private per-user file first, then the
+  # compose when it is readable (sudoless mode), reversing the writer's escaping.
+  WIN_USER=$(read_credential USERNAME) || WIN_USER=""
+  WIN_PASS=$(read_credential PASSWORD) || WIN_PASS=""
+  if [[ -z $WIN_USER || -z $WIN_PASS ]] && [[ -r $COMPOSE_FILE ]]; then
+    [[ -z $WIN_USER ]] && WIN_USER=$(unescape "$(read_compose_value USERNAME "$COMPOSE_FILE")")
+    [[ -z $WIN_PASS ]] && WIN_PASS=$(unescape "$(read_compose_value PASSWORD "$COMPOSE_FILE")")
+  fi
+  [[ -z $WIN_USER ]] && WIN_USER="docker"
+  [[ -z $WIN_PASS ]] && WIN_PASS="admin"
+
+  echo "Installing $base on Windows VM '$INSTANCE'..."
+  if ! priv up_wait; then
+    echo "❌ Windows has not finished booting. The VM is still running."
+    echo "   Watch it at: http://127.0.0.1:$WEB_PORT"
+    echo "   Then try again, or check: omarchy-subsystem-for-windows status"
+    return 1
+  fi
+
+  # Same Kerberos note as launch: a realm-less krb5 config makes FreeRDP fall
+  # straight through to NTLM against the local Windows account.
+  KRB5_CONF="$HOME/.config/windows/krb5.conf"
+  [[ $INSTANCE == default ]] || KRB5_CONF="$HOME/.config/windows/krb5-$INSTANCE.conf"
+  mkdir -p "$(dirname "$KRB5_CONF")"
+  if [[ ! -f $KRB5_CONF ]]; then
+    printf '[libdefaults]\n  dns_lookup_kdc = false\n  dns_lookup_realm = false\n' >"$KRB5_CONF"
+  fi
+  export KRB5_CONFIG="$KRB5_CONF"
+
+  gum style \
+    --border normal \
+    --padding "1 2" \
+    --margin "1" \
+    --align center \
+    "Installing into Windows VM" \
+    "" \
+    "$base" \
+    "" \
+    "Close the installer when it finishes" >/dev/null 2>&1 || true
+
+  # The password goes in over stdin: /proc/<pid>/cmdline is world-readable, so
+  # /p:"$WIN_PASS" on the command line would expose it to every local user.
+  local -a RDP_ARGS=(
+    "/u:$WIN_USER"
+    "/p:$WIN_PASS"
+    "/v:127.0.0.1:$RDP_PORT"
+    "/cert:ignore"
+    "/shell:$cmd"
+    "/title:Windows VM - install $base"
+    /dynamic-resolution
+  )
+  printf '%s\n' "${RDP_ARGS[@]}" | xfreerdp3 /args-from:stdin
+  local rc=$?
+
+  echo ""
+  echo "Installer session ended (exit $rc)."
+  if [[ $keep_alive == false ]]; then
+    priv down && echo "Windows VM stopped."
+  else
+    echo "The VM is still running. To stop it: omarchy-subsystem-for-windows stop $INSTANCE"
+  fi
+  return 0
 }
 
 stop_windows() {
@@ -1967,6 +2170,8 @@ status_windows() {
       "Instance:      $INSTANCE" \
       "Version:       $VERSION" \
       "Internet:      $INTERNET" \
+      "GPU:           $GPU" \
+      "Audio:         $AUDIO" \
       "Web interface: http://127.0.0.1:$WEB_PORT" \
       "RDP available: port $RDP_PORT" \
       "" \
@@ -2006,6 +2211,7 @@ create_windows() {
   shift
   local version="$VERSION" ram="4G" cores="2" disk="64G" internet="$INTERNET"
   local usb="$USB_DEVICES" username="docker" password="admin" start=0
+  local gpu="$GPU" audio="$AUDIO"
 
   while (($#)); do
     case $1 in
@@ -2014,6 +2220,10 @@ create_windows() {
     --cores) cores="${2:-}"; shift 2 || shift ;;
     --disk) disk="${2:-}"; shift 2 || shift ;;
     --usb) usb="${2:-}"; shift 2 || shift ;;
+    --gpu) gpu=on; shift ;;
+    --no-gpu) gpu=off; shift ;;
+    --audio) audio=on; shift ;;
+    --no-audio) audio=off; shift ;;
     --username) username="${2:-}"; shift 2 || shift ;;
     --password) password="${2:-}"; shift 2 || shift ;;
     --no-internet) internet=off; shift ;;
@@ -2033,6 +2243,12 @@ create_windows() {
   valid_password "$password" || { echo "omarchy-subsystem-for-windows: invalid password" >&2; return 2; }
   valid_internet "$internet" || { echo "omarchy-subsystem-for-windows: invalid internet setting" >&2; return 2; }
   valid_usb "$usb" || { echo "omarchy-subsystem-for-windows: invalid USB list: $usb" >&2; return 2; }
+  valid_toggle "$gpu" || { echo "omarchy-subsystem-for-windows: invalid GPU setting: $gpu" >&2; return 2; }
+  valid_toggle "$audio" || { echo "omarchy-subsystem-for-windows: invalid audio setting: $audio" >&2; return 2; }
+  if [[ $gpu == on && ! -d /dev/dri ]]; then
+    echo "omarchy-subsystem-for-windows: GPU acceleration needs /dev/dri, which is missing" >&2
+    return 2
+  fi
 
   if instance_exists; then
     echo "omarchy-subsystem-for-windows: instance '$name' already exists" >&2
@@ -2042,6 +2258,8 @@ create_windows() {
   VERSION=$version
   INTERNET=$internet
   USB_DEVICES=$usb
+  GPU=$gpu
+  AUDIO=$audio
   if [[ $INSTANCE == default ]]; then
     WEB_PORT=8006
     RDP_PORT=3389
@@ -2076,6 +2294,7 @@ create_windows() {
   ensure_instance_desktop || true
 
   echo "Created Windows VM '$name' (version $VERSION, ${ram} RAM, ${cores} cores, ${disk} disk, internet $INTERNET)"
+  echo "  Acceleration: CPU (KVM) always on; GPU $GPU; audio $AUDIO"
   echo "  Web console: http://127.0.0.1:$WEB_PORT"
   echo "  RDP port:    $RDP_PORT"
   if ((start)); then
@@ -2115,8 +2334,10 @@ list_instances() {
     status=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null || true)
     [[ -n $status ]] || status="stopped"
     if ((json)); then
-      printf '{"name":"%s","version":"%s","ram":"%s","cores":"%s","disk":"%s","internet":"%s","webPort":%s,"rdpPort":%s,"status":"%s"}\n' \
-        "$name" "$version" "$ram" "$cores" "$disk" "$internet" "${web:-0}" "${rdp:-0}" "$status"
+      printf '{"name":"%s","version":"%s","ram":"%s","cores":"%s","disk":"%s","internet":"%s","webPort":%s,"rdpPort":%s,"status":"%s","gpu":"%s","audio":"%s"}\n' \
+        "$name" "$version" "$ram" "$cores" "$disk" "$internet" "${web:-0}" "${rdp:-0}" "$status" \
+        "$(sed -n 's/^GPU=//p' "$conf" | head -1)" \
+        "$(sed -n 's/^AUDIO=//p' "$conf" | head -1)"
     else
       printf '%-12s %-8s %-6s %-5s %-6s %-4s %-6s %-6s %s\n' \
         "$name" "$version" "$ram" "$cores" "$disk" "$internet" "$web" "$rdp" "$status"
@@ -2138,12 +2359,12 @@ config_windows() {
   fi
   if [[ ${1:-} == --json ]] && (($# == 1)); then
     # The stable interface for the control centre: one object, no prose.
-    printf '{"name":"%s","version":"%s","ram":"%s","cores":"%s","disk":"%s","internet":"%s","webPort":%s,"rdpPort":%s,"usb":"%s"}\n' \
+    printf '{"name":"%s","version":"%s","ram":"%s","cores":"%s","disk":"%s","internet":"%s","webPort":%s,"rdpPort":%s,"usb":"%s","gpu":"%s","audio":"%s"}\n' \
       "$name" "$VERSION" \
       "$(sed -n 's/^RAM=//p' "$INSTANCE_CONF" | head -1)" \
       "$(sed -n 's/^CORES=//p' "$INSTANCE_CONF" | head -1)" \
       "$(sed -n 's/^DISK=//p' "$INSTANCE_CONF" | head -1)" \
-      "$INTERNET" "$WEB_PORT" "$RDP_PORT" "$USB_DEVICES"
+      "$INTERNET" "$WEB_PORT" "$RDP_PORT" "$USB_DEVICES" "$GPU" "$AUDIO"
     return 0
   fi
   if (($# == 0)); then
@@ -2156,6 +2377,8 @@ config_windows() {
     echo "Web port:  $WEB_PORT"
     echo "RDP port:  $RDP_PORT"
     echo "USB:       ${USB_DEVICES:-none}"
+    echo "GPU:       $GPU"
+    echo "Audio:     $AUDIO"
     return 0
   fi
 
@@ -2188,6 +2411,8 @@ config_windows() {
     web_port) valid_port "$value" || { echo "invalid web port: $value" >&2; return 2; }; WEB_PORT=$value ;;
     rdp_port) valid_port "$value" || { echo "invalid RDP port: $value" >&2; return 2; }; RDP_PORT=$value ;;
     usb) valid_usb "$value" || { echo "invalid USB list: $value" >&2; return 2; }; USB_DEVICES=$value ;;
+    gpu) valid_toggle "$value" || { echo "invalid GPU setting: $value" >&2; return 2; }; GPU=$value ;;
+    audio) valid_toggle "$value" || { echo "invalid audio setting: $value" >&2; return 2; }; AUDIO=$value ;;
     username) valid_username "$value" || { echo "invalid username: $value" >&2; return 2; }; username=$value ;;
     password) valid_password "$value" || { echo "invalid password" >&2; return 2; }; password=$value ;;
     *) echo "unknown setting: $key" >&2; return 2 ;;
@@ -2215,6 +2440,11 @@ show_usage() {
   echo "                                   Options: --version V --ram N --cores N"
   echo "                                            --disk N --no-internet"
   echo "                                            --usb 1234:5678 --start"
+  echo "                                            --gpu --audio (acceleration)"
+  echo "  --install <file> [options]       Install a .exe or .msi on a VM"
+  echo "                                   Options: --instance NAME"
+  echo "                                            --args \"<installer args>\""
+  echo "                                            --silent --stop-after"
   echo "  instances [--json]               List the VMs and their state"
   echo "  config <name> [KEY=VALUE ...]    Show or change a VM's settings"
   echo "  launch [name] [options]          Start a VM (if needed) and connect via RDP"
@@ -2230,6 +2460,7 @@ show_usage() {
   echo "  omarchy-subsystem-for-windows create offline --no-internet --start"
   echo "  omarchy-subsystem-for-windows instances              # List all VMs"
   echo "  omarchy-subsystem-for-windows launch work            # Connect to 'work'"
+  echo "  osw --install setup.exe --instance work              # Install a program on 'work'"
   echo "  omarchy-subsystem-for-windows config work ram=16G    # Change its RAM"
   echo "  omarchy-subsystem-for-windows stop work              # Shut it down"
 }
@@ -2258,6 +2489,36 @@ __priv)
   }
   with_vm_lock "__priv_${action}" "$@"
   ;;
+--install | install-exe)
+  # osw --install <file.exe> --instance <name>: stage the installer in the
+  # instance's shared folder and run it inside the guest over RDP.
+  shift
+  file="" args="" keep_alive=true silent=false inst=""
+  while (($#)); do
+    case $1 in
+    --instance) inst="${2:-}"; shift 2 || shift ;;
+    --args) args="${2:-}"; shift 2 || shift ;;
+    --silent) silent=true; shift ;;
+    --stop-after) keep_alive=false; shift ;;
+    --install) shift ;;
+    -*)
+      echo "omarchy-subsystem-for-windows: unknown install option: $1" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z $file ]]; then
+        file=$1
+      else
+        echo "omarchy-subsystem-for-windows: unexpected argument: $1" >&2
+        exit 2
+      fi
+      shift
+      ;;
+    esac
+  done
+  select_instance "${inst:-default}" || exit 1
+  install_exe "$file" "$args" "$keep_alive" "$silent"
+  ;;
 install)
   select_instance default || exit 1
   install_windows
@@ -2265,7 +2526,7 @@ install)
 create)
   name="${2:-}"
   [[ -n $name ]] || {
-    echo "usage: omarchy-subsystem-for-windows create <name> [--version V] [--ram N] [--cores N] [--disk N] [--no-internet] [--usb pairs] [--start]" >&2
+    echo "usage: omarchy-subsystem-for-windows create <name> [--version V] [--ram N] [--cores N] [--disk N] [--no-internet] [--usb pairs] [--gpu] [--audio] [--start]" >&2
     exit 1
   }
   shift

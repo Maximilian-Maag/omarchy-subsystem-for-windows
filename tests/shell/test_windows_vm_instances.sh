@@ -360,6 +360,7 @@ grep -q '^CREATED=[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T' "$conf" ||
 sed -i 's/^CREATED=.*/CREATED=2001-02-03T04:05:06Z/' "$conf"
 W_VERSION=10 W_RAM=4G W_CORES=2 W_DISK=64G W_INTERNET=off
 W_WEB_PORT=$lab_web W_RDP_PORT=$lab_rdp W_USB=""
+W_GPU=on W_AUDIO=on
 write_instance_conf || fail "rewriting the metadata failed"
 grep -q '^CREATED=2001-02-03T04:05:06Z$' "$conf" ||
   fail "rewriting the metadata lost the creation stamp"
