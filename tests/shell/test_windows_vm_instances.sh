@@ -29,6 +29,12 @@ STUB_BIN="$TMPDIR/bin"
 mkdir -p "$STUB_BIN"
 printf '#!/bin/bash\nexit 0\n' >"$STUB_BIN/omarchy-hw-x86"
 chmod +x "$STUB_BIN/omarchy-hw-x86"
+
+# The port allocator consults live listeners through ss. Stub it to report none,
+# so the expected pair does not depend on what happens to be running on the host
+# when the suite runs.
+printf '#!/bin/bash\nexit 0\n' >"$STUB_BIN/ss"
+chmod +x "$STUB_BIN/ss"
 PATH="$STUB_BIN:$PATH"
 
 set -- help
@@ -233,11 +239,31 @@ run_cli create >/dev/null 2>&1 && fail "create without a name succeeded"
 run_cli bogus >/dev/null 2>&1 && fail "unknown command exited 0"
 pass "command dispatch routes instance names and options"
 
+# --- the status hint names the instance as a positional argument ------------
+
+# A stubbed docker reports the container as running and a stubbed gum prints the
+# style arguments, so the hint text can be asserted without a real VM. The
+# privileged boundary is stubbed rather than entered: the installed copy is
+# root-owned and, inside the unprivileged namespace, host root is unmapped, so
+# both the direct path and the pkexec target check would refuse.
+printf '#!/bin/bash\n[[ $1 == inspect ]] && echo running\nexit 0\n' >"$STUB_BIN/docker"
+printf '#!/bin/bash\nprintf "%%s\\n" "$@"\n' >"$STUB_BIN/gum"
+chmod +x "$STUB_BIN/docker" "$STUB_BIN/gum"
+priv() { local action=$1; shift; "__priv_$action" "$@"; }
+# Run in a subshell: status_windows exits non-zero on a failed query, and that
+# must fail the assertion rather than end the suite.
+status_out=$( (select_instance work; status_windows) 2>&1 ) ||
+  fail "status work did not exit 0: [$status_out]"
+grep -q 'launch work' <<<"$status_out" || fail "status hint does not name the instance: [$status_out]"
+grep -q 'launch -work' <<<"$status_out" && fail "status hint passed the instance as an option"
+rm -f "$STUB_BIN/docker" "$STUB_BIN/gum"
+pass "status hint names the instance as a positional argument"
+
 # --- create allocates ports and writes metadata ----------------------------
 
-# Drive create_windows without elevation: the privileged action runs directly.
-# Free space is stubbed so the assertion does not depend on the test host's disk.
-priv() { local action=$1; shift; "__priv_$action" "$@"; }
+# Drive create_windows without elevation: the privileged action runs directly
+# through the priv stub installed above. Free space is stubbed so the assertion
+# does not depend on the test host's disk.
 available_storage_gb() { echo 500; }
 select_instance lab
 create_windows lab --version 10 --ram 4G --cores 2 --disk 64G --no-internet >/dev/null ||

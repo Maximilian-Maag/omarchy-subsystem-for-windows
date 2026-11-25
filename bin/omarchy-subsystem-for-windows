@@ -1952,7 +1952,7 @@ status_windows() {
   fi
 
   local suffix=""
-  [[ $INSTANCE == default ]] || suffix=" -$INSTANCE"
+  [[ $INSTANCE == default ]] || suffix=" $INSTANCE"
   if [[ -z $CONTAINER_STATUS ]]; then
     echo "Windows VM container not found."
     echo "To start: omarchy-subsystem-for-windows launch$suffix"
