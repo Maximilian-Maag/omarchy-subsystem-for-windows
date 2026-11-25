@@ -77,6 +77,10 @@ grep -q -- '- NET_ADMIN' "$COMPOSE" || fail "cap_add is pinned"
 grep -q -- "- $EXPECTED_STORAGE:/storage" "$COMPOSE" || fail "storage uses the protected anchor"
 grep -q -- "- $EXPECTED_SHARED:/shared" "$COMPOSE" || fail "shared uses the protected anchor"
 grep -q 'PROTECT: "Y"' "$COMPOSE" || fail "web console is not password protected"
+# The writer's default port pair comes from the script's initial values: the
+# stdin keys omitted here must fall back to 8006/3389, not to an off-by-one.
+grep -q '127.0.0.1:8006:8006' "$COMPOSE" || fail "default web port changed"
+grep -q '127.0.0.1:3389:3389/tcp' "$COMPOSE" || fail "default rdp port changed"
 [[ ! -L $HOME/.windows && ! -L $HOME/Windows ]] || fail "fresh sources stay real directories"
 [[ $(stat -Lc '%d:%i' "$HOME/.windows") == $(stat -Lc '%d:%i' "$EXPECTED_STORAGE") ]] || fail "storage bind did not pin source"
 [[ $(stat -Lc '%d:%i' "$HOME/Windows") == $(stat -Lc '%d:%i' "$EXPECTED_SHARED") ]] || fail "shared bind did not pin source"
@@ -378,6 +382,21 @@ resolve_caller
 [[ $(mount_layer_count "$EXPECTED_STORAGE") == 0 && $(mount_layer_count "$EXPECTED_SHARED") == 0 ]] || fail "writer failure left binds"
 [[ ! -f $COMPOSE ]] || fail "writer failure replaced compose"
 pass "atomic writer failure rolls back both new bind mounts"
+
+# A failure before the temp file exists leaves cleanup with an empty path. It
+# must not call rm on "" — that prints a second error and hides the real reason.
+reset_case
+prepare_user_mount_sources >/dev/null
+mktemp() { return 1; }
+if out=$(printf 'RAM=4G\nCORES=2\nDISK=64G\nUSERNAME=ok\nPASSWORD=p\nTZ=UTC\n' | __priv_write_compose 2>&1); then
+  rc=0
+else
+  rc=$?
+fi
+unset -f mktemp
+(( rc != 0 )) || fail "writer succeeded without a temp file"
+case $out in *"rm:"*) fail "cleanup tried to remove an empty path" "$out" ;; esac
+pass "a failed temp file leaves cleanup nothing to remove"
 
 # Revalidate ancestry during removal: move the already-bound shared inode below
 # storage, keep its familiar path as a symlink, and prove nothing is deleted.

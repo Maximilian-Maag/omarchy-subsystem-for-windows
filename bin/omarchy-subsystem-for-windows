@@ -905,6 +905,8 @@ write_compose_atomically() (
   cleanup_writer() {
     rc=$?
     trap - EXIT
+    # rm -f on an empty path is silent, so flipping this test is an equivalent
+    # mutant: the failure path leaves no temp file either way.
     [[ -z $tmp ]] || rm -f -- "$tmp" || true
     if ((rc != 0)) && ! rollback_new_caller_mounts; then rc=1; fi
     exit "$rc"
