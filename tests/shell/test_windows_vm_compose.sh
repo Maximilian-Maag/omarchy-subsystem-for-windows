@@ -272,10 +272,14 @@ concurrent_dc_calls=0
 dc() {
   local attempt
   [[ $1 == up && ${2:-} == -d ]] || return 1
+  # Sleep between checks: a tight spin can finish before the racer's 2 ms
+  # symlink window opens, and a descheduled racer on a loaded CI host makes
+  # that near-certain. A 1 ms poll spans the whole swap cycle.
   for ((attempt = 0; attempt < 20000; attempt++)); do
     if [[ -L $HOME/Windows && $(readlink "$HOME/Windows" 2>/dev/null) == / ]]; then
       break
     fi
+    sleep 0.001
   done
   [[ -L $HOME/Windows && $(readlink "$HOME/Windows" 2>/dev/null) == / ]] || return 1
   ((concurrent_dc_calls++))
