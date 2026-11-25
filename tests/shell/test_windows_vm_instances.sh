@@ -41,6 +41,13 @@ select_instance default
 [[ $WEB_PORT == 8006 && $RDP_PORT == 3389 ]] ||
   fail "default instance port pair changed: $WEB_PORT / $RDP_PORT"
 
+# The default's pair stays reserved before the default instance exists: its
+# create path hardcodes 8006/3389, so a named instance created first must not
+# take the pair and collide with the default VM later.
+pair=$(allocate_port_pair)
+[[ $pair == "8007 3390" ]] ||
+  fail "allocator gave a named instance the default's reserved pair: [$pair]"
+
 unmount_all() {
   local path
   # Every instance's anchors live below the runtime base, so unmount whatever is

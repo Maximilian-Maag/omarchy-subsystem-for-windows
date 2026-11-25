@@ -1394,11 +1394,16 @@ port_in_use() {
 # Allocation happens in the user-side create path and the pair is then written
 # into the compose by the privileged writer, so two creates racing each other
 # are serialized by the instance lock below.
+#
+# The default instance's pair is reserved even when that instance does not exist
+# yet: its create path hardcodes 8006/3389, so a named instance that grabbed the
+# pair first would collide with the default VM the moment someone created it.
 allocate_port_pair() {
   local web rdp
   for web in $(seq 8006 8099); do
     rdp=$((web - 8006 + 3389))
     ((rdp <= 3479)) || break
+    ((web == 8006)) && continue
     port_in_use "$web" && continue
     port_in_use "$rdp" && continue
     printf '%s %s\n' "$web" "$rdp"
