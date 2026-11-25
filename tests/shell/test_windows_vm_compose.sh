@@ -238,10 +238,10 @@ mv -T -- "$raced_shared" "$HOME/Windows"
 unset -f dc
 pass "a post-validation path swap cannot redirect Docker away from the pinned shared inode"
 
-# Run the same attack as a genuinely concurrent process. A successful bring-up
-# deliberately waits inside the Docker boundary until the attacker has replaced
-# the familiar path with /, then verifies that the real bind anchor still names
-# the caller-owned directory that was pinned before the race.
+# Run the same attack as a genuinely concurrent process. The racer waits for
+# the Docker call to start, swaps the familiar path to / once, and holds it
+# until the call returns: a handshake instead of a flip-flop, so the assertion
+# is about the pinned inode rather than about winning a scheduling race.
 reset_case
 prepare_user_mount_sources
 touch "$HOME/Windows/safe-marker"
@@ -251,30 +251,24 @@ concurrent_shared_id=$(stat -Lc '%d:%i' "$HOME/Windows")
 host_root_id=$(stat -Lc '%d:%i' /)
 race_source="$HOME/Windows.race-source"
 race_stop="$TMPDIR/stop-concurrent-race"
+race_started="$TMPDIR/start-concurrent-race"
 race_swaps="$TMPDIR/concurrent-race-swaps"
 (
   set +e
-  while [[ ! -e $race_stop ]]; do
-    if [[ -d $HOME/Windows && ! -L $HOME/Windows ]] && mv -T -- "$HOME/Windows" "$race_source" 2>/dev/null; then
-      ln -s / "$HOME/Windows" 2>/dev/null || true
-      printf x >>"$race_swaps"
-      sleep 0.002
-    fi
-    if [[ -L $HOME/Windows ]]; then
-      rm -f -- "$HOME/Windows"
-      mv -T -- "$race_source" "$HOME/Windows" 2>/dev/null || true
-      sleep 0.005
-    fi
-  done
+  while [[ ! -e $race_started ]]; do sleep 0.001; done
+  mv -T -- "$HOME/Windows" "$race_source" 2>/dev/null &&
+    ln -s / "$HOME/Windows" 2>/dev/null &&
+    printf x >>"$race_swaps"
+  while [[ ! -e $race_stop ]]; do sleep 0.001; done
+  if [[ -L $HOME/Windows ]]; then rm -f -- "$HOME/Windows"; fi
+  if [[ ! -e $HOME/Windows && -d $race_source ]]; then mv -T -- "$race_source" "$HOME/Windows"; fi
 ) >/dev/null &
 racer_pid=$!
 concurrent_dc_calls=0
 dc() {
   local attempt
   [[ $1 == up && ${2:-} == -d ]] || return 1
-  # Sleep between checks: a tight spin can finish before the racer's 2 ms
-  # symlink window opens, and a descheduled racer on a loaded CI host makes
-  # that near-certain. A 1 ms poll spans the whole swap cycle.
+  : >"$race_started"
   for ((attempt = 0; attempt < 20000; attempt++)); do
     if [[ -L $HOME/Windows && $(readlink "$HOME/Windows" 2>/dev/null) == / ]]; then
       break
@@ -288,7 +282,7 @@ dc() {
   [[ $(stat -Lc '%d:%i' "$EXPECTED_SHARED") != "$host_root_id" ]] || return 1
   [[ -f $EXPECTED_SHARED/safe-marker ]]
 }
-for ((attempt = 0; attempt < 200; attempt++)); do
+for ((attempt = 0; attempt < 20; attempt++)); do
   if __priv_up 2>/dev/null; then break; fi
 done
 touch "$race_stop"
