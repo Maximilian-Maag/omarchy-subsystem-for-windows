@@ -66,6 +66,28 @@ container's network attachment, which is a restart, not a live switch.
 modified copy is reported and left alone. `tests/shell/test_install.sh` covers the
 copy, idempotence and both uninstall paths.
 
+## Audio
+
+**Guest audio only reaches the host when the instance has a sound device and the
+client names a real backend.** Both halves are required and neither is implicit:
+
+- The image attaches an HDA device only when `AUDIO=Y` is in the container
+  environment, so the engine writes it from the instance's `audio` setting and
+  omits it entirely when the setting is off. A guest without the device produces
+  no audio to redirect, however the client is configured.
+- FreeRDP's bare `/sound` resolves to its fake backend on this build: the channel
+  opens, the guest plays, and nothing is heard. The launch arguments therefore say
+  `/sound:sys:alsa`, which reaches the host through PipeWire's ALSA bridge.
+
+The device the image attaches is `hda-output`: output only. Microphone
+redirection is sent (`/microphone:sys:alsa`) but has no capture endpoint to read
+from until the guest is given a duplex device, so it is documented as silent
+rather than advertised as working.
+
+`test_windows_vm_accel.sh` asserts the compose carries `AUDIO: "Y"` when the
+setting is on and omits it when off; `test_windows_vm_launch.sh` asserts the
+client receives the ALSA flags.
+
 ## What is not covered here
 
 A real Windows guest boot, RDP window and GPU/PCI passthrough are not exercised by

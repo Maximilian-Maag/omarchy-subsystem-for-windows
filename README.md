@@ -54,6 +54,25 @@ the session. A session that connected but ended (window closed, logoff, session
 limit) stops the VM; a connection that never succeeded leaves the VM running and
 says so. `--keep-alive` leaves the VM running after the session ends.
 
+## Sound
+
+Guest audio needs two things, and neither is on by default:
+
+```bash
+omarchy-subsystem-for-windows config work audio=on   # give the guest a sound card
+omarchy-subsystem-for-windows stop work && omarchy-subsystem-for-windows launch work
+```
+
+`audio=on` makes the image attach an HDA sound device to the guest. The RDP
+session then carries that audio back to the host, where the client plays it
+through PipeWire's ALSA bridge. The client must be told the backend explicitly:
+a bare `/sound` resolves to FreeRDP's fake backend on this build, so the guest
+plays audio and nothing is heard. `launch` therefore passes `/sound:sys:alsa`.
+
+The guest's HDA device is output-only. Microphone capture from the host needs a
+duplex device the image does not attach, so `/microphone:sys:alsa` is sent but
+yields silence until the guest has a capture endpoint.
+
 ## Runtime layout
 
 The plugin shares the runtime namespace with the core `omarchy-windows-vm`

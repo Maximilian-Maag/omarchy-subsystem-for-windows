@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Hardware acceleration toggles per instance: `gpu` and `audio` settings, `--gpu`
+  / `--audio` on `create`, and `config <name> gpu=on audio=on`. GPU hands the
+  host's render node to the guest; audio attaches an HDA device and streams guest
+  audio back over RDP.
+- `--install <installer.exe> [--instance <name>] [--args ...] [--silent]` stages a
+  Windows installer in the instance's shared folder and runs it inside the guest.
+
+### Fixed
+
+- A launched RDP session now names FreeRDP's ALSA backend explicitly. The bare
+  `/sound` option resolved to the fake backend, so guest audio played and was
+  never heard.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added
