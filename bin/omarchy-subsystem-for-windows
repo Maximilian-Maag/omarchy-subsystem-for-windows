@@ -2118,7 +2118,7 @@ list_instances() {
     fi
   done
   if ((count == 0 && !json)); then
-    echo "No Windows VMs configured. Create one with: omarchy windows vm create <name>"
+    echo "No Windows VMs configured. Create one with: omarchy-subsystem-for-windows create <name>"
   fi
 }
 
